@@ -17,6 +17,7 @@ from deep_translator.exceptions import (
     TranslationNotFound,
 )
 from deep_translator.validate import is_empty, is_input_valid
+import aiohttp
 
 
 class GoogleTranslator(BaseTranslator):
@@ -102,6 +103,55 @@ class GoogleTranslator(BaseTranslator):
 
             else:
                 return element.get_text(strip=True)
+
+    async def translate_async(self, text: str, **kwargs) -> str:
+        """
+        function to translate a text
+        @param text: desired text to translate
+        @return: str: translated text
+        """
+        if not is_input_valid(text):
+            return text
+
+        text = text.strip()
+        if self._same_source_target() or is_empty(text):
+            return text
+
+        self._url_params["tl"] = self._target
+        self._url_params["sl"] = self._source
+
+        if self.payload_key:
+            self._url_params[self.payload_key] = text
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(self._base_url, params=self._url_params) as response:
+                if response.status == 429:
+                    raise TooManyRequests()
+
+                if response.status != 200:
+                    raise RequestError()
+
+                soup = BeautifulSoup(await response.text(), "html.parser")
+
+                element = soup.find(self._element_tag, self._element_query)
+
+                if not element:
+                    element = soup.find(self._element_tag, self._alt_element_query)
+                    if not element:
+                        raise TranslationNotFound(text)
+
+                if element.get_text(strip=True) == text.strip():
+                    to_translate_alpha = "".join(ch for ch in text.strip() if ch.isalnum())
+                    translated_alpha = "".join(ch for ch in element.get_text(strip=True) if ch.isalnum())
+                    if to_translate_alpha and translated_alpha and to_translate_alpha == translated_alpha:
+                        self._url_params["tl"] = self._target
+                        if "hl" not in self._url_params:
+                            return text.strip()
+                        del self._url_params["hl"]
+                        return await self.translate(text)
+
+                else:
+                    return element.get_text(strip=True)
 
     def translate_file(self, path: str, **kwargs) -> str:
         """
